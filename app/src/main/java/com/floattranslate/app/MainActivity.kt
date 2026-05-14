@@ -23,56 +23,41 @@ class MainActivity : AppCompatActivity() {
     private val micPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
-            checkOverlayPermission()
-        } else {
-            Toast.makeText(this, "Microphone permission required!", Toast.LENGTH_LONG).show()
-        }
+        if (granted) checkOverlayPermission()
+        else Toast.makeText(this, "Microphone permission is required!", Toast.LENGTH_LONG).show()
     }
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
-        if (Settings.canDrawOverlays(this)) {
-            startFloatingService()
-        } else {
-            Toast.makeText(this, "Overlay permission required to show floating widget!", Toast.LENGTH_LONG).show()
-        }
+        if (Settings.canDrawOverlays(this)) startFloatingService()
+        else Toast.makeText(this, "Overlay permission is required!", Toast.LENGTH_LONG).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         btnToggle = findViewById(R.id.btn_toggle)
         tvStatus = findViewById(R.id.tv_status)
-
         btnToggle.setOnClickListener {
-            if (serviceRunning) {
-                stopFloatingService()
-            } else {
-                checkPermissionsAndStart()
-            }
+            if (serviceRunning) stopFloatingService()
+            else checkPermissionsAndStart()
         }
-
         updateUI()
     }
 
     private fun checkPermissionsAndStart() {
-        when {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED -> {
-                // Request mic permission
-                AlertDialog.Builder(this)
-                    .setTitle("Microphone Permission")
-                    .setMessage("This app needs microphone access to listen and translate speech in real-time.")
-                    .setPositiveButton("Grant") { _, _ ->
-                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-            else -> checkOverlayPermission()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            AlertDialog.Builder(this)
+                .setTitle("Microphone Permission")
+                .setMessage("This app needs microphone access to listen and translate speech.")
+                .setPositiveButton("Grant") { _, _ ->
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+                .setNegativeButton("Cancel", null).show()
+        } else {
+            checkOverlayPermission()
         }
     }
 
@@ -80,33 +65,28 @@ class MainActivity : AppCompatActivity() {
         if (!Settings.canDrawOverlays(this)) {
             AlertDialog.Builder(this)
                 .setTitle("Display Over Other Apps")
-                .setMessage("Float Translate needs permission to show a floating widget over other apps. Please enable it in the next screen.")
+                .setMessage("Float Translate needs permission to show a floating widget over other apps.")
                 .setPositiveButton("Open Settings") { _, _ ->
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
+                    overlayPermissionLauncher.launch(
+                        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName"))
                     )
-                    overlayPermissionLauncher.launch(intent)
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
+                .setNegativeButton("Cancel", null).show()
         } else {
             startFloatingService()
         }
     }
 
     private fun startFloatingService() {
-        val intent = Intent(this, FloatingService::class.java)
-        startForegroundService(intent)
+        startForegroundService(Intent(this, FloatingService::class.java))
         serviceRunning = true
         updateUI()
-        // Minimize app so floating widget is visible
         moveTaskToBack(true)
     }
 
     private fun stopFloatingService() {
-        val intent = Intent(this, FloatingService::class.java)
-        stopService(intent)
+        stopService(Intent(this, FloatingService::class.java))
         serviceRunning = false
         updateUI()
     }
@@ -114,16 +94,10 @@ class MainActivity : AppCompatActivity() {
     private fun updateUI() {
         if (serviceRunning) {
             btnToggle.text = "⏹ Stop Float Translate"
-            tvStatus.text = "Status: ACTIVE — Floating widget is on screen"
+            tvStatus.text = "Status: ACTIVE — Floating widget is on screen\n(First launch: model downloads ~50MB)"
         } else {
             btnToggle.text = "▶ Start Float Translate"
             tvStatus.text = "Status: Inactive"
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Check if service is actually running
-        updateUI()
     }
 }
