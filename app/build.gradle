@@ -11,8 +11,8 @@ android {
         applicationId "com.floattranslate.app"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "2.0"
     }
 
     buildTypes {
@@ -30,6 +30,17 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
+
+    buildFeatures {
+        viewBinding true
+    }
+
+    packagingOptions {
+        pickFirst 'lib/arm64-v8a/libvosk.so'
+        pickFirst 'lib/armeabi-v7a/libvosk.so'
+        pickFirst 'lib/x86/libvosk.so'
+        pickFirst 'lib/x86_64/libvosk.so'
+    }
 }
 
 dependencies {
@@ -37,6 +48,9 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.10.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+
+    // Vosk offline speech recognition (no Google app needed)
+    implementation 'com.alphacephei:vosk-android:0.3.47'
 
     // ML Kit Language Identification
     implementation 'com.google.mlkit:language-id:17.0.4'
