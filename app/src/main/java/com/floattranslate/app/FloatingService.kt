@@ -23,8 +23,10 @@ import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.StorageService
-import java.io.IOException
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.util.zip.ZipInputStream
 
 class FloatingService : Service() {
 
@@ -42,14 +44,12 @@ class FloatingService : Service() {
     private var audioRecord: AudioRecord? = null
     private var isRecording = false
     private var recordThread: Thread? = null
-
     private var layoutParams: WindowManager.LayoutParams? = null
 
     companion object {
         const val CHANNEL_ID = "FloatTranslateChannel"
         const val NOTIF_ID = 1
         const val SAMPLE_RATE = 16000
-        const val BUFFER_SIZE = 4096
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -60,98 +60,58 @@ class FloatingService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         setupFloatingView()
         updateStatus("⏳ Loading model...")
-        loadVoskModel()
+        Thread { loadModel() }.start()
     }
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID, "Float Translate", NotificationManager.IMPORTANCE_LOW
-        ).apply { description = "Floating translation service" }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-    }
-
-    private fun buildNotification(): Notification {
-        val stopIntent = Intent(this, FloatingService::class.java).apply { action = "STOP" }
-        val stopPending = PendingIntent.getService(
-            this, 0, stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Float Translate Active")
-            .setContentText("Listening and translating to English...")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(android.R.drawable.ic_delete, "Stop", stopPending)
-            .build()
-    }
-
-    private fun setupFloatingView() {
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        floatingView = LayoutInflater.from(this).inflate(R.layout.floating_widget, null)
-        tvTranslation = floatingView.findViewById(R.id.tv_translation)
-        tvStatus = floatingView.findViewById(R.id.tv_status)
-        ivMic = floatingView.findViewById(R.id.iv_mic)
-
-        layoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 50; y = 200
-        }
-
-        windowManager.addView(floatingView, layoutParams)
-        makeDraggable()
-        floatingView.findViewById<View>(R.id.btn_close).setOnClickListener { stopSelf() }
-    }
-
-    private fun makeDraggable() {
-        var initX = 0; var initY = 0
-        var initTX = 0f; var initTY = 0f
-        var moved = false
-
-        floatingView.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initX = layoutParams!!.x; initY = layoutParams!!.y
-                    initTX = event.rawX; initTY = event.rawY
-                    moved = false; true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - initTX).toInt()
-                    val dy = (event.rawY - initTY).toInt()
-                    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true
-                    layoutParams!!.x = initX + dx
-                    layoutParams!!.y = initY + dy
-                    windowManager.updateViewLayout(floatingView, layoutParams)
-                    true
-                }
-                else -> false
+    private fun loadModel() {
+        try {
+            val modelDir = File(filesDir, "vosk-model")
+            if (!modelDir.exists() || modelDir.listFiles().isNullOrEmpty()) {
+                handler.post { updateStatus("📦 Unpacking model...") }
+                modelDir.mkdirs()
+                unpackModelFromAssets(modelDir)
             }
+            handler.post { updateStatus("🔧 Initializing...") }
+            model = Model(modelDir.absolutePath)
+            handler.post { updateStatus("🎙 Listening...") }
+            startRecording()
+        } catch (e: Exception) {
+            handler.post { updateStatus("❌ ${e.message?.take(40)}") }
         }
     }
 
-    private fun loadVoskModel() {
-        StorageService.unpack(this, "model-small-en-us", "model",
-            { model ->
-                this.model = model
-                handler.post { updateStatus("🎙 Listening...") }
-                startRecording()
-            },
-            { exception ->
-                handler.post { updateStatus("❌ Model load failed") }
+    private fun unpackModelFromAssets(destDir: File) {
+        assets.open("model-small-en-us.zip").use { input ->
+            ZipInputStream(input).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    // strip top-level folder from zip path
+                    val parts = entry.name.split("/").drop(1)
+                    if (parts.isEmpty() || parts.all { it.isEmpty() }) {
+                        entry = zip.nextEntry
+                        continue
+                    }
+                    val relativePath = parts.joinToString("/")
+                    val outFile = File(destDir, relativePath)
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { out ->
+                            zip.copyTo(out)
+                        }
+                    }
+                    entry = zip.nextEntry
+                }
             }
-        )
+        }
     }
 
     private fun startRecording() {
         try {
             recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
-        } catch (e: IOException) {
-            handler.post { updateStatus("❌ Recognizer error") }
+        } catch (e: Exception) {
+            handler.post { updateStatus("❌ Recognizer error: ${e.message?.take(30)}") }
             return
         }
 
@@ -159,7 +119,7 @@ class FloatingService : Service() {
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(BUFFER_SIZE)
+        ).coerceAtLeast(8192)
 
         try {
             audioRecord = AudioRecord(
@@ -178,18 +138,13 @@ class FloatingService : Service() {
         isRecording = true
 
         recordThread = Thread {
-            val buffer = ShortArray(BUFFER_SIZE / 2)
+            val buffer = ByteArray(bufferSize)
             while (isRecording) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
                 if (read > 0) {
-                    val byteBuffer = ByteArray(read * 2)
-                    for (i in 0 until read) {
-                        byteBuffer[i * 2] = (buffer[i].toInt() and 0xFF).toByte()
-                        byteBuffer[i * 2 + 1] = (buffer[i].toInt() shr 8 and 0xFF).toByte()
-                    }
-
                     val rec = recognizer ?: break
-                    if (rec.acceptWaveForm(byteBuffer, byteBuffer.size)) {
+                    val chunk = buffer.copyOf(read)
+                    if (rec.acceptWaveForm(chunk, read)) {
                         val resultJson = rec.result
                         processResult(resultJson)
                     } else {
@@ -203,11 +158,10 @@ class FloatingService : Service() {
 
     private fun processResult(json: String) {
         try {
-            val text = org.json.JSONObject(json).optString("text", "").trim()
+            val text = JSONObject(json).optString("text", "").trim()
             if (text.isBlank()) return
             handler.post { updateStatus("🔄 Translating...") }
-            translatorHelper.detectAndTranslate(
-                text,
+            translatorHelper.detectAndTranslate(text,
                 onResult = { translated ->
                     handler.post {
                         tvTranslation.text = translated
@@ -228,15 +182,66 @@ class FloatingService : Service() {
 
     private fun processPartial(json: String) {
         try {
-            val partial = org.json.JSONObject(json).optString("partial", "").trim()
-            if (partial.isNotBlank()) {
-                handler.post { updateStatus("🎙 \"$partial\"") }
-            }
+            val p = JSONObject(json).optString("partial", "").trim()
+            if (p.isNotBlank()) handler.post { updateStatus("🎙 \"$p\"") }
         } catch (_: Exception) {}
     }
 
     private fun updateStatus(msg: String) {
         tvStatus.text = msg
+    }
+
+    private fun createNotificationChannel() {
+        val ch = NotificationChannel(CHANNEL_ID, "Float Translate", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+    }
+
+    private fun buildNotification(): Notification {
+        val stopIntent = Intent(this, FloatingService::class.java).apply { action = "STOP" }
+        val pi = PendingIntent.getService(this, 0, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Float Translate Active")
+            .setContentText("Listening and translating...")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(android.R.drawable.ic_delete, "Stop", pi)
+            .build()
+    }
+
+    private fun setupFloatingView() {
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        floatingView = LayoutInflater.from(this).inflate(R.layout.floating_widget, null)
+        tvTranslation = floatingView.findViewById(R.id.tv_translation)
+        tvStatus = floatingView.findViewById(R.id.tv_status)
+        ivMic = floatingView.findViewById(R.id.iv_mic)
+
+        layoutParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 50; y = 200 }
+
+        windowManager.addView(floatingView, layoutParams)
+        makeDraggable()
+        floatingView.findViewById<View>(R.id.btn_close).setOnClickListener { stopSelf() }
+    }
+
+    private fun makeDraggable() {
+        var iX = 0; var iY = 0; var iTX = 0f; var iTY = 0f
+        floatingView.setOnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> { iX = layoutParams!!.x; iY = layoutParams!!.y; iTX = ev.rawX; iTY = ev.rawY; true }
+                MotionEvent.ACTION_MOVE -> {
+                    layoutParams!!.x = iX + (ev.rawX - iTX).toInt()
+                    layoutParams!!.y = iY + (ev.rawY - iTY).toInt()
+                    windowManager.updateViewLayout(floatingView, layoutParams); true
+                }
+                else -> false
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -247,10 +252,8 @@ class FloatingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRecording = false
-        audioRecord?.stop()
-        audioRecord?.release()
-        recognizer?.close()
-        model?.close()
+        audioRecord?.stop(); audioRecord?.release()
+        recognizer?.close(); model?.close()
         translatorHelper.close()
         try { windowManager.removeView(floatingView) } catch (_: Exception) {}
     }
