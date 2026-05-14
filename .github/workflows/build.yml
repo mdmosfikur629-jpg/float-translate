@@ -19,10 +19,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Download Vosk small English model
+        run: |
+          mkdir -p app/src/main/assets/model-small-en-us
+          cd /tmp
+          wget -q https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk-model-small-en-us-0.15.zip
+          cp -r vosk-model-small-en-us-0.15/* $GITHUB_WORKSPACE/app/src/main/assets/model-small-en-us/
+          echo "Model files:"
+          ls $GITHUB_WORKSPACE/app/src/main/assets/model-small-en-us/
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.2'
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -33,6 +41,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FloatTranslate-debug
+          name: FloatTranslate-v2-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
