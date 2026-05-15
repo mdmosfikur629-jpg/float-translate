@@ -35,6 +35,10 @@ android {
         viewBinding true
     }
 
+    aaptOptions {
+        noCompress "zip"
+    }
+
     packagingOptions {
         pickFirst 'lib/arm64-v8a/libvosk.so'
         pickFirst 'lib/armeabi-v7a/libvosk.so'
